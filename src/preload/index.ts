@@ -47,12 +47,18 @@ export interface CluiAPI {
   /** OS-level click-through for transparent window regions */
   setIgnoreMouseEvents(ignore: boolean, options?: { forward?: boolean }): void
 
+  // ─── Phone auth ───
+  launchAuthPhone(): Promise<{ url: string | null; error: string | null }>
+  authPhoneCompleteRedirect(redirectUrl: string): Promise<{ ok: boolean; error: string | null }>
+  authPhoneCancel(): void
+
   // ─── Event listeners (main → renderer) ───
   onEvent(callback: (tabId: string, event: NormalizedEvent) => void): () => void
   onTabStatusChange(callback: (tabId: string, newStatus: string, oldStatus: string) => void): () => void
   onError(callback: (tabId: string, error: EnrichedError) => void): () => void
   onSkillStatus(callback: (status: { name: string; state: string; error?: string; reason?: string }) => void): () => void
   onWindowShown(callback: () => void): () => void
+  onMaximizeStateChange(callback: (isMaximized: boolean) => void): () => void
 }
 
 const api: CluiAPI = {
@@ -108,6 +114,11 @@ const api: CluiAPI = {
     ipcRenderer.send(IPC.SET_IGNORE_MOUSE_EVENTS, ignore, options || {}),
   setWindowWidth: (width) => ipcRenderer.send(IPC.SET_WINDOW_WIDTH, width),
 
+  // ─── Phone auth ───
+  launchAuthPhone: () => ipcRenderer.invoke(IPC.LAUNCH_AUTH_PHONE),
+  authPhoneCompleteRedirect: (redirectUrl) => ipcRenderer.invoke(IPC.AUTH_PHONE_COMPLETE_REDIRECT, redirectUrl),
+  authPhoneCancel: () => ipcRenderer.send(IPC.AUTH_PHONE_CANCEL),
+
   // ─── Event listeners ───
   onEvent: (callback) => {
     const channels = [
@@ -145,6 +156,12 @@ const api: CluiAPI = {
     const handler = () => callback()
     ipcRenderer.on(IPC.WINDOW_SHOWN, handler)
     return () => ipcRenderer.removeListener(IPC.WINDOW_SHOWN, handler)
+  },
+
+  onMaximizeStateChange: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, isMaximized: boolean) => callback(isMaximized)
+    ipcRenderer.on(IPC.WINDOW_MAXIMIZE_STATE, handler)
+    return () => ipcRenderer.removeListener(IPC.WINDOW_MAXIMIZE_STATE, handler)
   },
 }
 

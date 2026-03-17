@@ -6,6 +6,7 @@ import { ConversationView } from './components/ConversationView'
 import { InputBar } from './components/InputBar'
 import { StatusBar } from './components/StatusBar'
 import { MarketplacePanel } from './components/MarketplacePanel'
+import { PhoneAuthModal } from './components/PhoneAuthModal'
 import { PopoverLayerProvider } from './components/PopoverLayer'
 import { useClaudeEvents } from './hooks/useClaudeEvents'
 import { useHealthReconciliation } from './hooks/useHealthReconciliation'
@@ -24,27 +25,33 @@ export default function App() {
   const colors = useColors()
   const setSystemTheme = useThemeStore((s) => s.setSystemTheme)
   const expandedUI = useThemeStore((s) => s.expandedUI)
+  const isMaximized = useSessionStore((s) => s.isMaximized)
 
   // ─── Theme initialization ───
   useEffect(() => {
-    // Get initial OS theme — setSystemTheme respects themeMode (system/light/dark)
     window.clui.getTheme().then(({ isDark }) => {
       setSystemTheme(isDark)
     }).catch(() => {})
 
-    // Listen for OS theme changes
     const unsub = window.clui.onThemeChange((isDark) => {
       setSystemTheme(isDark)
     })
     return unsub
   }, [setSystemTheme])
 
+  // ─── Listen for maximize state changes from main process ───
+  useEffect(() => {
+    const unsub = window.clui.onMaximizeStateChange((maximized: boolean) => {
+      useSessionStore.setState({ isMaximized: maximized, isExpanded: true })
+    })
+    return unsub
+  }, [])
+
   useEffect(() => {
     useSessionStore.getState().initStaticInfo().then(() => {
       const homeDir = useSessionStore.getState().staticInfo?.homePath || '~'
       const tab = useSessionStore.getState().tabs[0]
       if (tab) {
-        // Set working directory to home by default (user hasn't chosen yet)
         useSessionStore.setState((s) => ({
           tabs: s.tabs.map((t, i) => (i === 0 ? { ...t, workingDirectory: homeDir, hasChosenDirectory: false } : t)),
         }))
@@ -57,8 +64,6 @@ export default function App() {
       }
     })
   }, [])
-
-  // setIgnoreMouseEvents is now controlled by main process (show/hide) for Windows compatibility
 
   const isExpanded = useSessionStore((s) => s.isExpanded)
   const marketplaceOpen = useSessionStore((s) => s.marketplaceOpen)
@@ -85,6 +90,43 @@ export default function App() {
     addAttachments(files)
   }, [addAttachments])
 
+  // ─── Maximized full-screen layout ───
+  if (isMaximized) {
+    return (
+      <PopoverLayerProvider>
+        <div
+          className="flex flex-col h-full"
+          style={{ background: colors.containerBg }}
+        >
+          {/* Tab strip at top */}
+          <TabStrip />
+
+          {/* Main content fills remaining space */}
+          <div className="flex-1 overflow-hidden flex flex-col" style={{ minHeight: 0 }}>
+            <div className="flex-1 overflow-auto">
+              <ConversationView />
+            </div>
+            <StatusBar />
+          </div>
+
+          {/* Input bar at bottom */}
+          <div
+            style={{
+              padding: '8px 16px 12px',
+              borderTop: `1px solid ${colors.containerBorder}`,
+              background: colors.containerBg,
+            }}
+          >
+            <InputBar />
+          </div>
+
+          <PhoneAuthModal />
+        </div>
+      </PopoverLayerProvider>
+    )
+  }
+
+  // ─── Normal pill/overlay layout ───
   return (
     <PopoverLayerProvider>
       <div className="flex flex-col justify-end h-full" style={{ background: 'transparent' }}>
@@ -129,8 +171,6 @@ export default function App() {
 
           {/*
             ─── Tabs / message shell ───
-            This always remains the chat shell. The marketplace is a separate
-            panel rendered above it, never inside it.
           */}
           <motion.div
             data-clui-ui
@@ -153,10 +193,8 @@ export default function App() {
               zIndex: isExpanded ? 20 : 10,
             }}
           >
-            {/* Tab strip — has its own drag/no-drag regions */}
             <TabStrip />
 
-            {/* Body — chat history only; the marketplace is a separate overlay above */}
             <motion.div
               initial={false}
               animate={{
@@ -175,7 +213,6 @@ export default function App() {
           </motion.div>
 
           {/* ─── Input row — circles float outside left ─── */}
-          {/* marginBottom: shadow buffer so the glass-surface drop shadow isn't clipped at the native window edge */}
           <div
             data-clui-ui
             className="relative cursor-grab active:cursor-grabbing"
@@ -189,7 +226,6 @@ export default function App() {
               onMouseDown={(e) => e.stopPropagation()}
             >
               <div className="btn-stack">
-                {/* btn-1: Attach (front, rightmost) */}
                 <button
                   className="stack-btn stack-btn-1 glass-surface"
                   title="Attach file"
@@ -198,7 +234,6 @@ export default function App() {
                 >
                   <Paperclip size={17} />
                 </button>
-                {/* btn-2: Screenshot (middle) */}
                 <button
                   className="stack-btn stack-btn-2 glass-surface"
                   title="Take screenshot"
@@ -207,7 +242,6 @@ export default function App() {
                 >
                   <Camera size={17} />
                 </button>
-                {/* btn-3: Skills (back, leftmost) */}
                 <button
                   className="stack-btn stack-btn-3 glass-surface"
                   title="Skills & Plugins"
@@ -230,6 +264,8 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        <PhoneAuthModal />
       </div>
     </PopoverLayerProvider>
   )

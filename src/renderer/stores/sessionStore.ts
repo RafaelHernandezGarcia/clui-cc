@@ -26,12 +26,20 @@ interface State {
   activeTabId: string
   /** Global expand/collapse — user-controlled, not per-tab */
   isExpanded: boolean
+  /** Whether the native window is in maximized/fullscreen mode */
+  isMaximized: boolean
   /** Global info fetched on startup (not per-session) */
   staticInfo: StaticInfo | null
   /** User's preferred model override (null = use default) */
   preferredModel: string | null
   /** Global permission mode: 'ask' shows cards, 'auto' auto-approves all tool calls */
   permissionMode: 'ask' | 'auto'
+
+  // Phone auth state
+  phoneAuthOpen: boolean
+  phoneAuthUrl: string | null
+  phoneAuthError: string | null
+  phoneAuthLoading: boolean
 
   // Marketplace state
   marketplaceOpen: boolean
@@ -73,6 +81,11 @@ interface State {
   handleNormalizedEvent: (tabId: string, event: NormalizedEvent) => void
   handleStatusChange: (tabId: string, newStatus: string, oldStatus: string) => void
   handleError: (tabId: string, error: EnrichedError) => void
+
+  // Phone auth actions
+  openPhoneAuth: () => Promise<void>
+  closePhoneAuth: () => void
+  completePhoneAuthRedirect: (url: string) => Promise<void>
 }
 
 let msgCounter = 0
@@ -125,9 +138,16 @@ export const useSessionStore = create<State>((set, get) => ({
   tabs: [initialTab],
   activeTabId: initialTab.id,
   isExpanded: false,
+  isMaximized: false,
   staticInfo: null,
   preferredModel: null,
   permissionMode: 'ask',
+
+  // Phone auth
+  phoneAuthOpen: false,
+  phoneAuthUrl: null,
+  phoneAuthError: null,
+  phoneAuthLoading: false,
 
   // Marketplace
   marketplaceOpen: false,
@@ -852,5 +872,42 @@ export const useSessionStore = create<State>((set, get) => ({
         }
       }),
     }))
+  },
+
+  // ─── Phone Auth ───
+
+  openPhoneAuth: async () => {
+    set({ phoneAuthOpen: true, phoneAuthUrl: null, phoneAuthError: null, phoneAuthLoading: true })
+    try {
+      const result = await window.clui.launchAuthPhone()
+      if (result.url) {
+        set({ phoneAuthUrl: result.url, phoneAuthLoading: false })
+      } else {
+        set({ phoneAuthError: result.error || 'No URL returned', phoneAuthLoading: false })
+      }
+    } catch (err: any) {
+      set({ phoneAuthError: err?.message || 'Unknown error', phoneAuthLoading: false })
+    }
+  },
+
+  closePhoneAuth: () => {
+    window.clui.authPhoneCancel()
+    set({ phoneAuthOpen: false, phoneAuthUrl: null, phoneAuthError: null, phoneAuthLoading: false })
+  },
+
+  completePhoneAuthRedirect: async (url: string) => {
+    set({ phoneAuthLoading: true, phoneAuthError: null })
+    try {
+      const result = await window.clui.authPhoneCompleteRedirect(url)
+      if (result.ok) {
+        set({ phoneAuthOpen: false, phoneAuthUrl: null, phoneAuthError: null, phoneAuthLoading: false })
+        // Refresh static info to pick up the new auth
+        get().initStaticInfo()
+      } else {
+        set({ phoneAuthError: result.error || 'Redirect failed', phoneAuthLoading: false })
+      }
+    } catch (err: any) {
+      set({ phoneAuthError: err?.message || 'Unknown error', phoneAuthLoading: false })
+    }
   },
 }))

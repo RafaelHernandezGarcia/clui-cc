@@ -223,29 +223,28 @@ ipcMain.on(IPC.WINDOW_MINIMIZE, () => {
 
 ipcMain.on(IPC.WINDOW_MAXIMIZE, () => {
   if (!mainWindow) return
-  // Track state ourselves — isMaximized() returns false for transparent windows on Windows
   if (savedBoundsBeforeMaximize) {
-    // Restore from maximized/fullscreen
+    // ─── Restore from maximized ───
     if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false)
     mainWindow.setResizable(true)
     mainWindow.setBounds(savedBoundsBeforeMaximize)
     mainWindow.setResizable(false)
+    mainWindow.setAlwaysOnTop(true, 'screen-saver')
     savedBoundsBeforeMaximize = null
+    broadcast(IPC.WINDOW_MAXIMIZE_STATE, false)
+    log('[maximize] Restored to pill mode')
     return
   }
+  // ─── Maximize: fill the work area manually ───
   savedBoundsBeforeMaximize = mainWindow.getBounds()
-  mainWindow.maximize()
-  // Transparent windows on Windows often don't resize; fallback to fullscreen after a tick
-  setTimeout(() => {
-    if (!mainWindow?.isDestroyed() && savedBoundsBeforeMaximize) {
-      const b = mainWindow.getBounds()
-      const display = screen.getDisplayMatching(b)
-      const { width, height } = display.bounds
-      if (b.width < width - 50 || b.height < height - 50) {
-        mainWindow.setFullScreen(true)
-      }
-    }
-  }, 50)
+  mainWindow.setAlwaysOnTop(false)
+  mainWindow.setResizable(true)
+  const cursor = screen.getCursorScreenPoint()
+  const display = screen.getDisplayNearestPoint(cursor)
+  const { x, y, width, height } = display.workArea
+  mainWindow.setBounds({ x, y, width, height })
+  broadcast(IPC.WINDOW_MAXIMIZE_STATE, true)
+  log(`[maximize] Filled workArea: ${width}x${height} on display ${display.id}`)
 })
 
 ipcMain.on(IPC.WINDOW_DRAG, (_event, delta: { x: number; y: number }) => {
@@ -884,6 +883,114 @@ ipcMain.handle(IPC.LAUNCH_AUTH_LOGIN, () => {
   } catch (err: unknown) {
     log(`Failed to launch auth login: ${err}`)
     return false
+  }
+})
+
+// ─── Phone Auth: capture OAuth URL from `claude auth login` for remote completion ───
+
+let phoneAuthProcess: ReturnType<typeof import('child_process').spawn> | null = null
+
+ipcMain.handle(IPC.LAUNCH_AUTH_PHONE, async () => {
+  const { spawn } = require('child_process')
+  // Kill any previous phone-auth process
+  if (phoneAuthProcess) {
+    try { phoneAuthProcess.kill() } catch {}
+    phoneAuthProcess = null
+  }
+  return new Promise<{ url: string | null; error: string | null }>((resolve) => {
+    try {
+      const args = ['auth', 'login']
+      const proc = spawn('claude', args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        ...(isWin ? { shell: true } : {}),
+      })
+      phoneAuthProcess = proc
+      let captured = false
+      const urlRegex = /https?:\/\/[^\s"'<>]+(?:oauth|auth|login)[^\s"'<>]*/i
+      const genericUrlRegex = /https?:\/\/[^\s"'<>]{20,}/
+
+      const scanForUrl = (chunk: Buffer) => {
+        if (captured) return
+        const text = chunk.toString()
+        log(`[phone-auth] output: ${text.substring(0, 300)}`)
+        const match = text.match(urlRegex) || text.match(genericUrlRegex)
+        if (match) {
+          captured = true
+          log(`[phone-auth] Captured URL: ${match[0]}`)
+          resolve({ url: match[0], error: null })
+        }
+      }
+
+      proc.stdout?.on('data', scanForUrl)
+      proc.stderr?.on('data', scanForUrl)
+
+      proc.on('close', (code) => {
+        log(`[phone-auth] process exited code=${code}`)
+        if (!captured) {
+          resolve({ url: null, error: `claude auth login exited (code ${code}) without producing a URL. Is Claude CLI installed?` })
+        }
+        phoneAuthProcess = null
+      })
+
+      proc.on('error', (err: Error) => {
+        log(`[phone-auth] spawn error: ${err.message}`)
+        if (!captured) {
+          resolve({ url: null, error: `Failed to launch claude: ${err.message}` })
+        }
+        phoneAuthProcess = null
+      })
+
+      // Timeout: if no URL captured in 15s, give up
+      setTimeout(() => {
+        if (!captured) {
+          captured = true
+          resolve({ url: null, error: 'Timed out waiting for auth URL. Make sure Claude CLI is installed and on your PATH.' })
+          try { proc.kill() } catch {}
+          phoneAuthProcess = null
+        }
+      }, 15000)
+    } catch (err: unknown) {
+      resolve({ url: null, error: `Spawn failed: ${err}` })
+    }
+  })
+})
+
+ipcMain.handle(IPC.AUTH_PHONE_COMPLETE_REDIRECT, async (_event, redirectUrl: string) => {
+  // The user pasted the localhost callback URL from their phone's browser.
+  // Hit it locally so the waiting `claude auth login` process receives the OAuth code.
+  const http = require('http')
+  const https = require('https')
+  log(`[phone-auth] Completing redirect: ${redirectUrl}`)
+  return new Promise<{ ok: boolean; error: string | null }>((resolve) => {
+    try {
+      const mod = redirectUrl.startsWith('https') ? https : http
+      const req = mod.get(redirectUrl, { timeout: 10000 }, (res: any) => {
+        let body = ''
+        res.on('data', (c: Buffer) => { body += c.toString() })
+        res.on('end', () => {
+          log(`[phone-auth] Redirect response ${res.statusCode}: ${body.substring(0, 200)}`)
+          resolve({ ok: res.statusCode < 400, error: res.statusCode >= 400 ? `HTTP ${res.statusCode}` : null })
+        })
+      })
+      req.on('error', (err: Error) => {
+        log(`[phone-auth] Redirect request failed: ${err.message}`)
+        resolve({ ok: false, error: err.message })
+      })
+      req.on('timeout', () => {
+        req.destroy()
+        resolve({ ok: false, error: 'Request timed out' })
+      })
+    } catch (err: unknown) {
+      resolve({ ok: false, error: `${err}` })
+    }
+  })
+})
+
+ipcMain.on(IPC.AUTH_PHONE_CANCEL, () => {
+  if (phoneAuthProcess) {
+    log('[phone-auth] Cancelling')
+    try { phoneAuthProcess.kill() } catch {}
+    phoneAuthProcess = null
   }
 })
 

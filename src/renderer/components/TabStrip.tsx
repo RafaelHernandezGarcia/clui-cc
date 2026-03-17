@@ -1,6 +1,6 @@
 import React, { useRef, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, X, Minus, ArrowsOut, DotsSixVertical } from '@phosphor-icons/react'
+import { Plus, X, Minus, ArrowsOut, ArrowsIn, DotsSixVertical, DeviceMobile } from '@phosphor-icons/react'
 import { useSessionStore } from '../stores/sessionStore'
 import { HistoryPicker } from './HistoryPicker'
 import { SettingsPopover } from './SettingsPopover'
@@ -42,6 +42,7 @@ export function TabStrip() {
   const selectTab = useSessionStore((s) => s.selectTab)
   const createTab = useSessionStore((s) => s.createTab)
   const closeTab = useSessionStore((s) => s.closeTab)
+  const isMaximized = useSessionStore((s) => s.isMaximized)
   const colors = useColors()
   const isDraggingRef = useRef(false)
   const lastPosRef = useRef({ x: 0, y: 0 })
@@ -174,6 +175,14 @@ export function TabStrip() {
       {/* Pinned action buttons — always visible on the right */}
       <div className="flex items-center gap-0.5 flex-shrink-0 ml-1 pr-2 no-drag" onMouseDown={(e) => e.stopPropagation()}>
         <button
+          onClick={() => useSessionStore.getState().openPhoneAuth()}
+          className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-colors hover:bg-black/10"
+          style={{ color: colors.textTertiary }}
+          title="Authenticate via phone"
+        >
+          <DeviceMobile size={14} />
+        </button>
+        <button
           onClick={() => window.clui.minimizeWindow()}
           className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-colors hover:bg-black/10"
           style={{ color: colors.textTertiary }}
@@ -185,9 +194,9 @@ export function TabStrip() {
           onClick={() => window.clui.maximizeWindow()}
           className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-colors hover:bg-black/10"
           style={{ color: colors.textTertiary }}
-          title="Fullscreen / Exit fullscreen"
+          title={isMaximized ? 'Restore window' : 'Maximize'}
         >
-          <ArrowsOut size={12} />
+          {isMaximized ? <ArrowsIn size={12} /> : <ArrowsOut size={12} />}
         </button>
         <button
           onClick={() => createTab()}

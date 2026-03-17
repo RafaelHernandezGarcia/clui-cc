@@ -341,10 +341,16 @@ export const IPC = {
   HIDE_WINDOW: 'clui:hide-window',
   WINDOW_MINIMIZE: 'clui:window-minimize',
   WINDOW_MAXIMIZE: 'clui:window-maximize',
+  WINDOW_MAXIMIZE_STATE: 'clui:window-maximize-state',
   WINDOW_DRAG: 'clui:window-drag',
   WINDOW_SHOWN: 'clui:window-shown',
   SET_IGNORE_MOUSE_EVENTS: 'clui:set-ignore-mouse-events',
   IS_VISIBLE: 'clui:is-visible',
+
+  // Phone auth
+  LAUNCH_AUTH_PHONE: 'clui:launch-auth-phone',
+  AUTH_PHONE_COMPLETE_REDIRECT: 'clui:auth-phone-complete-redirect',
+  AUTH_PHONE_CANCEL: 'clui:auth-phone-cancel',
 
   // Skill provisioning (main → renderer)
   SKILL_STATUS: 'clui:skill-status',
