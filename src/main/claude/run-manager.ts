@@ -1,6 +1,6 @@
 import { spawn, execSync, ChildProcess } from 'child_process'
 import { EventEmitter } from 'events'
-import { homedir } from 'os'
+import { homedir, platform } from 'os'
 import { join } from 'path'
 import { StreamParser } from '../stream-parser'
 import { normalize } from './event-normalizer'
@@ -101,6 +101,28 @@ export class RunManager extends EventEmitter {
   }
 
   private _findClaudeBinary(): string {
+    const isWin = platform() === 'win32'
+
+    if (isWin) {
+      const winCandidates = [
+        join(homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+        join(homedir(), 'AppData', 'Roaming', 'npm', 'claude'),
+        join(homedir(), 'scoop', 'shims', 'claude.cmd'),
+        'claude',
+      ]
+      const { existsSync } = require('fs')
+      for (const c of winCandidates) {
+        if (c === 'claude') break
+        try {
+          if (existsSync(c)) return c
+        } catch {}
+      }
+      try {
+        return execSync('where claude', { encoding: 'utf-8' }).trim().split('\n')[0] || 'claude'
+      } catch {}
+      return 'claude'
+    }
+
     const candidates = [
       '/usr/local/bin/claude',
       '/opt/homebrew/bin/claude',
@@ -129,20 +151,35 @@ export class RunManager extends EventEmitter {
     const env = { ...process.env }
     delete env.CLAUDECODE
 
-    if (!this._loginShellPath) {
-      try {
-        this._loginShellPath = execSync('/bin/zsh -lc "echo $PATH"', { encoding: 'utf-8' }).trim()
-      } catch {
-        this._loginShellPath = ''
-      }
-    }
-    if (this._loginShellPath) {
-      env.PATH = this._loginShellPath
-    }
+    const isWin = platform() === 'win32'
 
-    const binDir = this.claudeBinary.substring(0, this.claudeBinary.lastIndexOf('/'))
-    if (env.PATH && !env.PATH.includes(binDir)) {
-      env.PATH = `${binDir}:${env.PATH}`
+    if (!isWin) {
+      if (!this._loginShellPath) {
+        try {
+          this._loginShellPath = execSync('/bin/zsh -lc "echo $PATH"', { encoding: 'utf-8' }).trim()
+        } catch {
+          this._loginShellPath = ''
+        }
+      }
+      if (this._loginShellPath) {
+        env.PATH = this._loginShellPath
+      }
+
+      const lastSlash = this.claudeBinary.lastIndexOf('/')
+      if (lastSlash > 0) {
+        const binDir = this.claudeBinary.substring(0, lastSlash)
+        if (env.PATH && !env.PATH.includes(binDir)) {
+          env.PATH = `${binDir}:${env.PATH}`
+        }
+      }
+    } else {
+      // Windows: ensure npm global bin is in PATH
+      const npmGlobal = join(homedir(), 'AppData', 'Roaming', 'npm')
+      const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH'
+      const pathVal = env[pathKey]
+      if (pathVal && !pathVal.includes(npmGlobal)) {
+        env[pathKey] = `${npmGlobal};${pathVal}`
+      }
     }
 
     return env
@@ -210,11 +247,17 @@ export class RunManager extends EventEmitter {
       log(`Starting run ${requestId}`)
     }
 
-    const child = spawn(this.claudeBinary, args, {
+    const spawnOpts: Record<string, unknown> = {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd,
       env: this._getEnv(),
-    })
+    }
+    // Windows: .cmd files need shell to execute; also ensures npm global scripts work
+    if (platform() === 'win32') {
+      spawnOpts.shell = true
+    }
+
+    const child = spawn(this.claudeBinary, args, spawnOpts)
 
     log(`Spawned PID: ${child.pid}`)
 

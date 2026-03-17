@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import {
   FileText, PencilSimple, FileArrowUp, Terminal, MagnifyingGlass, Globe,
   Robot, Question, Wrench, FolderOpen, Copy, Check, CaretRight, CaretDown,
-  SpinnerGap, ArrowCounterClockwise, Square,
+  SpinnerGap, ArrowCounterClockwise, Square, SignIn,
 } from '@phosphor-icons/react'
 import { useSessionStore } from '../stores/sessionStore'
 import { PermissionCard } from './PermissionCard'
@@ -52,6 +52,63 @@ function groupMessages(messages: Message[]): GroupedItem[] {
   }
   flushTools()
   return result
+}
+
+// ─── Login Banner ───
+
+function LoginBanner({ colors, onRefresh }: { colors: ReturnType<typeof useColors>; onRefresh: () => void }) {
+  const handleLogin = async () => {
+    await window.clui.launchAuthLogin()
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-3 px-3 py-2 rounded-xl"
+      style={{
+        background: colors.statusErrorBg,
+        border: `1px solid ${colors.permissionDeniedBorder || colors.statusError}`,
+      }}
+    >
+      <div className="flex items-start gap-2">
+        <SignIn size={16} style={{ color: colors.statusError, flexShrink: 0, marginTop: 1 }} />
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] font-medium" style={{ color: colors.statusError }}>
+            Sign in to Claude Code
+          </p>
+          <p className="text-[10px] mt-0.5" style={{ color: colors.textSecondary }}>
+            A terminal will open. Press <kbd className="px-1 rounded" style={{ background: colors.surfacePrimary }}>c</kbd> to copy the login URL. Open it in a browser on this computer to complete sign-in. (The callback must reach this machine.)
+          </p>
+          <div className="flex gap-2 mt-2">
+            <button
+              onClick={handleLogin}
+              className="text-[11px] font-medium px-3 py-1.5 rounded-full transition-colors cursor-pointer flex items-center gap-1.5"
+              style={{
+                background: colors.accentLight,
+                color: colors.accent,
+                border: `1px solid ${colors.accentBorderMedium}`,
+              }}
+            >
+              <SignIn size={12} />
+              Open Login
+            </button>
+            <button
+              onClick={onRefresh}
+              className="text-[11px] font-medium px-3 py-1.5 rounded-full transition-colors cursor-pointer"
+              style={{
+                background: colors.surfaceHover,
+                color: colors.textTertiary,
+                border: `1px solid ${colors.surfaceSecondary}`,
+              }}
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  )
 }
 
 // ─── Main Component ───
@@ -126,7 +183,12 @@ export function ConversationView() {
   const isFailed = tab.status === 'failed'
   const showInterrupt = isRunning && tab.messages.some((m) => m.role === 'user')
 
-  if (tab.messages.length === 0) {
+  // Show login prompt when not authenticated or when error mentions /login
+  const needsLogin = !staticInfo?.email || tab.messages.some(
+    (m) => m.content && typeof m.content === 'string' && (m.content.includes('Invalid API key') || m.content.includes('/login'))
+  )
+
+  if (tab.messages.length === 0 && !needsLogin) {
     return <EmptyState />
   }
 
@@ -153,6 +215,11 @@ export function ConversationView() {
         style={{ maxHeight: expandedUI ? 460 : 336, paddingBottom: 28 }}
         onScroll={handleScroll}
       >
+        {/* Login banner — when auth required */}
+        {needsLogin && (
+          <LoginBanner colors={colors} onRefresh={() => useSessionStore.getState().initStaticInfo()} />
+        )}
+
         {/* Load older button */}
         {hasOlder && (
           <div className="flex justify-center py-2">

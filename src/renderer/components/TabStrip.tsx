@@ -1,6 +1,6 @@
-import React from 'react'
+import React, { useRef, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, X } from '@phosphor-icons/react'
+import { Plus, X, Minus, ArrowsOut, DotsSixVertical } from '@phosphor-icons/react'
 import { useSessionStore } from '../stores/sessionStore'
 import { HistoryPicker } from './HistoryPicker'
 import { SettingsPopover } from './SettingsPopover'
@@ -43,15 +43,67 @@ export function TabStrip() {
   const createTab = useSessionStore((s) => s.createTab)
   const closeTab = useSessionStore((s) => s.closeTab)
   const colors = useColors()
+  const isDraggingRef = useRef(false)
+  const lastPosRef = useRef({ x: 0, y: 0 })
+  const dragStartedRef = useRef(false)
+  const draggedRef = useRef(false) // true if we actually moved the window (used to suppress tab click)
+  const DRAG_THRESHOLD = 4
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    lastPosRef.current = { x: e.screenX, y: e.screenY }
+    dragStartedRef.current = true
+    isDraggingRef.current = false
+    draggedRef.current = false
+  }, [])
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!dragStartedRef.current) return
+      const dx = e.screenX - lastPosRef.current.x
+      const dy = e.screenY - lastPosRef.current.y
+      if (!isDraggingRef.current) {
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        if (dist < DRAG_THRESHOLD) return
+        isDraggingRef.current = true
+        draggedRef.current = true
+      }
+      lastPosRef.current = { x: e.screenX, y: e.screenY }
+      window.clui.dragWindow(dx, dy)
+    }
+    const onUp = () => {
+      dragStartedRef.current = false
+      isDraggingRef.current = false
+      setTimeout(() => { draggedRef.current = false }, 0)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [])
 
   return (
     <div
       data-clui-ui
-      className="flex items-center no-drag"
+      className="flex items-center"
       style={{ padding: '8px 0' }}
     >
-      {/* Scrollable tabs area — clipped by master card edge */}
-      <div className="relative min-w-0 flex-1">
+      {/* Drag area — entire left side (grip + tabs) is draggable; buttons on right are not */}
+      <div
+        className="flex-shrink-0 w-6 flex items-center justify-center cursor-grab active:cursor-grabbing"
+        style={{ color: colors.textTertiary, opacity: 0.5 }}
+        title="Drag to move"
+        onMouseDown={handleDragStart}
+      >
+        <DotsSixVertical size={12} />
+      </div>
+      <div
+        className="relative min-w-0 flex-1 cursor-grab active:cursor-grabbing"
+        style={{ minHeight: 28 }}
+        onMouseDown={handleDragStart}
+      >
         <div
           className="flex items-center gap-1 overflow-x-auto min-w-0"
           style={{
@@ -76,7 +128,15 @@ export function TabStrip() {
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.9 }}
                   transition={{ duration: 0.15 }}
-                  onClick={() => selectTab(tab.id)}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (draggedRef.current) {
+                      draggedRef.current = false
+                      e.preventDefault()
+                      return
+                    }
+                    selectTab(tab.id)
+                  }}
                   className="group flex items-center gap-1.5 cursor-pointer select-none flex-shrink-0 max-w-[160px] transition-all duration-150"
                   style={{
                     background: isActive ? colors.tabActive : 'transparent',
@@ -112,10 +172,26 @@ export function TabStrip() {
       </div>
 
       {/* Pinned action buttons — always visible on the right */}
-      <div className="flex items-center gap-0.5 flex-shrink-0 ml-1 pr-2">
+      <div className="flex items-center gap-0.5 flex-shrink-0 ml-1 pr-2 no-drag" onMouseDown={(e) => e.stopPropagation()}>
+        <button
+          onClick={() => window.clui.minimizeWindow()}
+          className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-colors hover:bg-black/10"
+          style={{ color: colors.textTertiary }}
+          title="Minimize"
+        >
+          <Minus size={14} />
+        </button>
+        <button
+          onClick={() => window.clui.maximizeWindow()}
+          className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-colors hover:bg-black/10"
+          style={{ color: colors.textTertiary }}
+          title="Fullscreen / Exit fullscreen"
+        >
+          <ArrowsOut size={12} />
+        </button>
         <button
           onClick={() => createTab()}
-          className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-colors"
+          className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-colors hover:bg-black/10"
           style={{ color: colors.textTertiary }}
           title="New tab"
         >

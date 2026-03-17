@@ -9,6 +9,7 @@ import { MarketplacePanel } from './components/MarketplacePanel'
 import { PopoverLayerProvider } from './components/PopoverLayer'
 import { useClaudeEvents } from './hooks/useClaudeEvents'
 import { useHealthReconciliation } from './hooks/useHealthReconciliation'
+import { useWindowDrag } from './hooks/useWindowDrag'
 import { useSessionStore } from './stores/sessionStore'
 import { useColors, useThemeStore, spacing } from './theme'
 
@@ -57,39 +58,7 @@ export default function App() {
     })
   }, [])
 
-  // OS-level click-through (RAF-throttled to avoid per-pixel IPC)
-  useEffect(() => {
-    if (!window.clui?.setIgnoreMouseEvents) return
-    let lastIgnored: boolean | null = null
-
-    const onMouseMove = (e: MouseEvent) => {
-      const el = document.elementFromPoint(e.clientX, e.clientY)
-      const isUI = !!(el && el.closest('[data-clui-ui]'))
-      const shouldIgnore = !isUI
-      if (shouldIgnore !== lastIgnored) {
-        lastIgnored = shouldIgnore
-        if (shouldIgnore) {
-          window.clui.setIgnoreMouseEvents(true, { forward: true })
-        } else {
-          window.clui.setIgnoreMouseEvents(false)
-        }
-      }
-    }
-
-    const onMouseLeave = () => {
-      if (lastIgnored !== true) {
-        lastIgnored = true
-        window.clui.setIgnoreMouseEvents(true, { forward: true })
-      }
-    }
-
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseleave', onMouseLeave)
-    return () => {
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseleave', onMouseLeave)
-    }
-  }, [])
+  // setIgnoreMouseEvents is now controlled by main process (show/hide) for Windows compatibility
 
   const isExpanded = useSessionStore((s) => s.isExpanded)
   const marketplaceOpen = useSessionStore((s) => s.marketplaceOpen)
@@ -101,6 +70,8 @@ export default function App() {
   const cardCollapsedWidth = expandedUI ? 670 : 430
   const cardCollapsedMargin = expandedUI ? 15 : 15
   const bodyMaxHeight = expandedUI ? 520 : 400
+
+  const onWindowDrag = useWindowDrag()
 
   const handleScreenshot = useCallback(async () => {
     const result = await window.clui.takeScreenshot()
@@ -182,10 +153,8 @@ export default function App() {
               zIndex: isExpanded ? 20 : 10,
             }}
           >
-            {/* Tab strip — always mounted */}
-            <div className="no-drag">
-              <TabStrip />
-            </div>
+            {/* Tab strip — has its own drag/no-drag regions */}
+            <TabStrip />
 
             {/* Body — chat history only; the marketplace is a separate overlay above */}
             <motion.div
@@ -196,6 +165,7 @@ export default function App() {
               }}
               transition={TRANSITION}
               className="overflow-hidden no-drag"
+              onMouseDown={(e) => e.stopPropagation()}
             >
               <div style={{ maxHeight: bodyMaxHeight }}>
                 <ConversationView />
@@ -206,11 +176,17 @@ export default function App() {
 
           {/* ─── Input row — circles float outside left ─── */}
           {/* marginBottom: shadow buffer so the glass-surface drop shadow isn't clipped at the native window edge */}
-          <div data-clui-ui className="relative" style={{ minHeight: 46, zIndex: 15, marginBottom: 10 }}>
+          <div
+            data-clui-ui
+            className="relative cursor-grab active:cursor-grabbing"
+            style={{ minHeight: 46, zIndex: 15, marginBottom: 10 }}
+            onMouseDown={onWindowDrag}
+          >
             {/* Stacked circle buttons — expand on hover */}
             <div
               data-clui-ui
               className="circles-out"
+              onMouseDown={(e) => e.stopPropagation()}
             >
               <div className="btn-stack">
                 {/* btn-1: Attach (front, rightmost) */}
@@ -248,6 +224,7 @@ export default function App() {
               data-clui-ui
               className="glass-surface w-full"
               style={{ minHeight: 50, borderRadius: 25, padding: '0 6px 0 16px', background: colors.inputPillBg }}
+              onMouseDown={(e) => e.stopPropagation()}
             >
               <InputBar />
             </div>

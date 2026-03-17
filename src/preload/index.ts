@@ -16,6 +16,7 @@ export interface CluiAPI {
   selectDirectory(): Promise<string | null>
   openExternal(url: string): Promise<boolean>
   openInTerminal(sessionId: string | null, projectPath?: string): Promise<boolean>
+  launchAuthLogin(): Promise<boolean>
   attachFiles(): Promise<Attachment[] | null>
   takeScreenshot(): Promise<Attachment | null>
   pasteImage(dataUrl: string): Promise<Attachment | null>
@@ -39,6 +40,9 @@ export interface CluiAPI {
   setWindowWidth(width: number): void
   animateHeight(from: number, to: number, durationMs: number): Promise<void>
   hideWindow(): void
+  minimizeWindow(): void
+  maximizeWindow(): void
+  dragWindow(deltaX: number, deltaY: number): void
   isVisible(): Promise<boolean>
   /** OS-level click-through for transparent window regions */
   setIgnoreMouseEvents(ignore: boolean, options?: { forward?: boolean }): void
@@ -65,6 +69,7 @@ const api: CluiAPI = {
   selectDirectory: () => ipcRenderer.invoke(IPC.SELECT_DIRECTORY),
   openExternal: (url) => ipcRenderer.invoke(IPC.OPEN_EXTERNAL, url),
   openInTerminal: (sessionId, projectPath) => ipcRenderer.invoke(IPC.OPEN_IN_TERMINAL, { sessionId, projectPath }),
+  launchAuthLogin: () => ipcRenderer.invoke(IPC.LAUNCH_AUTH_LOGIN),
   attachFiles: () => ipcRenderer.invoke(IPC.ATTACH_FILES),
   takeScreenshot: () => ipcRenderer.invoke(IPC.TAKE_SCREENSHOT),
   pasteImage: (dataUrl) => ipcRenderer.invoke(IPC.PASTE_IMAGE, dataUrl),
@@ -95,6 +100,9 @@ const api: CluiAPI = {
   animateHeight: (from, to, durationMs) =>
     ipcRenderer.invoke(IPC.ANIMATE_HEIGHT, { from, to, durationMs }),
   hideWindow: () => ipcRenderer.send(IPC.HIDE_WINDOW),
+  minimizeWindow: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
+  maximizeWindow: () => ipcRenderer.send(IPC.WINDOW_MAXIMIZE),
+  dragWindow: (deltaX, deltaY) => ipcRenderer.send(IPC.WINDOW_DRAG, { x: deltaX, y: deltaY }),
   isVisible: () => ipcRenderer.invoke(IPC.IS_VISIBLE),
   setIgnoreMouseEvents: (ignore, options) =>
     ipcRenderer.send(IPC.SET_IGNORE_MOUSE_EVENTS, ignore, options || {}),

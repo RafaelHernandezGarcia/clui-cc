@@ -1,6 +1,8 @@
-# Clui CC — Command Line User Interface for Claude Code
+# Clui CC — Command Line User Interface for Claude Code (Windows)
 
-A lightweight, transparent desktop overlay for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on macOS. Clui CC wraps the Claude Code CLI in a floating pill interface with multi-tab sessions, a permission approval UI, voice input, and a skills marketplace.
+> **Windows version.** This fork is built and tested for Windows. The original macOS version can be found in the [upstream project](https://github.com/lcoutodemos/clui-cc).
+
+A lightweight, transparent desktop overlay for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Clui CC wraps the Claude Code CLI in a floating pill interface with multi-tab sessions, a permission approval UI, voice input, and a skills marketplace.
 
 ## Demo
 
@@ -51,7 +53,7 @@ Run these commands one at a time:
 **1) Clone the repo**
 
 ```bash
-git clone https://github.com/lcoutodemos/clui-cc.git
+git clone https://github.com/RafaelHernandezGarcia/clui-cc.git
 ```
 
 **2) Enter the project folder**
@@ -62,80 +64,56 @@ cd clui-cc
 
 **3) Start the app**
 
+**macOS:**
 ```bash
 ./start.command
 ```
 
-Optional (install voice dependency automatically first):
+**Windows (PowerShell):**
+```powershell
+.\start.ps1
+```
 
+Optional on macOS (install voice dependency automatically first):
 ```bash
 ./start.command --with-voice
 ```
 
-`start.command` runs environment checks first and prints exact fix commands if something is missing. If checks pass, it installs dependencies, builds, and launches the app.
+The start script runs environment checks first and prints exact fix commands if something is missing. If checks pass, it installs dependencies, builds, and launches the app.
 
 To close the app:
+- **macOS:** `./stop.command` or tray icon > Quit
+- **Windows:** `.\stop.ps1` or tray icon > Quit
 
-```bash
-./stop.command
-```
-
-You can also double-click `start.command` and `stop.command` from Finder.
-
-Toggle the overlay: **Alt+Space** (or **Cmd+Shift+K** as fallback).
+Toggle the overlay: **Alt+Space** (or **Cmd+Shift+K** / **Ctrl+Shift+K** as fallback).
 
 <details>
 <summary><strong>Setup Prerequisites (Detailed)</strong></summary>
 
-You need **macOS 13+**. Then install these one at a time — copy each command and paste it into Terminal.
+### Windows
 
-**Step 1.** Install Xcode Command Line Tools (needed to compile native modules):
+1. **Node.js** (v18+): Download from [nodejs.org](https://nodejs.org) or `winget install OpenJS.NodeJS.LTS`
+2. **Claude Code CLI:** `npm install -g @anthropic-ai/claude-code`
+3. **Authenticate:** Run `claude` and follow the prompts
+4. **Verify:** `claude --version` (should print 2.1.x or higher)
 
-```bash
-xcode-select --install
-```
+**Optional:** Whisper for voice input — `scoop install whisper-cpp` or `pip install openai-whisper`
 
-**Step 2.** Install Node.js (recommended: current LTS such as 20 or 22; minimum supported: 18). Download from [nodejs.org](https://nodejs.org), or use Homebrew:
+### macOS (13+)
 
-```bash
-brew install node
-```
+**Step 1.** Xcode Command Line Tools: `xcode-select --install`
 
-Verify it's on your PATH:
+**Step 2.** Node.js (v18+): `brew install node` or [nodejs.org](https://nodejs.org)
 
-```bash
-node --version
-```
+**Step 3.** Python setuptools: `python3 -m pip install --upgrade pip setuptools`
 
-**Step 3.** Make sure Python has `setuptools` (needed by the native module compiler). On Python 3.12+ this is missing by default:
+**Step 4.** Claude Code CLI: `npm install -g @anthropic-ai/claude-code`
 
-```bash
-python3 -m pip install --upgrade pip setuptools
-```
+**Step 5.** Authenticate: `claude` (follow prompts)
 
-**Step 4.** Install Claude Code CLI:
+**Step 6.** Verify: `claude --version` (should print 2.1.x or higher)
 
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-**Step 5.** Authenticate Claude Code (follow the prompts that appear):
-
-```bash
-claude
-```
-
-**Step 6.** Verify Claude Code is working (should print `2.1.x` or higher):
-
-```bash
-claude --version
-```
-
-**Optional:** Install Whisper for voice input:
-
-```bash
-brew install whisper-cli
-```
+**Optional:** Whisper for voice input: `brew install whisper-cli`
 
 > **No API keys or `.env` file required.** Clui CC uses your existing Claude Code CLI authentication (Pro/Team/Enterprise subscription).
 
@@ -255,9 +233,13 @@ npm run doctor
 
 ## Known Limitations
 
-- **macOS only** — transparent overlay, tray icon, and node-pty are macOS-specific. Windows/Linux support is not currently implemented.
+- **macOS and Windows** — Linux support is not currently implemented.
 - **Requires Claude Code CLI** — Clui CC is a UI layer, not a standalone AI client. You need an authenticated `claude` CLI.
 - **Permission mode** — uses `--permission-mode default`. The PTY interactive transport is legacy and disabled by default.
+
+## Author
+
+**Rafael Hernandez Garcia** — [@RafaelHernandezGarcia](https://github.com/RafaelHernandezGarcia) · Montreal, Canada
 
 ## License
 

@@ -16,7 +16,7 @@
  */
 
 import { EventEmitter } from 'events'
-import { homedir } from 'os'
+import { homedir, platform } from 'os'
 import { join } from 'path'
 import { execSync } from 'child_process'
 import { appendFileSync, chmodSync, existsSync, statSync } from 'fs'
@@ -287,11 +287,14 @@ export class PtyRunManager extends EventEmitter {
   /**
    * node-pty prebuilt spawn-helper may lose execute bit depending on install/archive flow.
    * Ensure it's executable at runtime to avoid "posix_spawnp failed".
+   * Windows: no chmod needed, skip.
    */
   private _ensureSpawnHelperExecutable(): void {
+    if (platform() === 'win32') return
+
     try {
-      const pkgPath = require.resolve('node-pty/package.json')
       const path = require('path') as typeof import('path')
+      const pkgPath = require.resolve('node-pty/package.json')
       const helperPath = path.join(
         path.dirname(pkgPath),
         'prebuilds',
@@ -311,6 +314,27 @@ export class PtyRunManager extends EventEmitter {
   }
 
   private _findClaudeBinary(): string {
+    const isWin = platform() === 'win32'
+
+    if (isWin) {
+      const winCandidates = [
+        join(homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+        join(homedir(), 'AppData', 'Roaming', 'npm', 'claude'),
+        join(homedir(), 'scoop', 'shims', 'claude.cmd'),
+        'claude',
+      ]
+      for (const c of winCandidates) {
+        if (c === 'claude') break
+        try {
+          if (existsSync(c)) return c
+        } catch {}
+      }
+      try {
+        return execSync('where claude', { encoding: 'utf-8' }).trim().split('\n')[0] || 'claude'
+      } catch {}
+      return 'claude'
+    }
+
     const candidates = [
       '/usr/local/bin/claude',
       '/opt/homebrew/bin/claude',
@@ -339,20 +363,34 @@ export class PtyRunManager extends EventEmitter {
     const env = { ...process.env }
     delete env.CLAUDECODE
 
-    if (!this._loginShellPath) {
-      try {
-        this._loginShellPath = execSync('/bin/zsh -lc "echo $PATH"', { encoding: 'utf-8' }).trim()
-      } catch {
-        this._loginShellPath = ''
-      }
-    }
-    if (this._loginShellPath) {
-      env.PATH = this._loginShellPath
-    }
+    const isWin = platform() === 'win32'
 
-    const binDir = this.claudeBinary.substring(0, this.claudeBinary.lastIndexOf('/'))
-    if (env.PATH && !env.PATH.includes(binDir)) {
-      env.PATH = `${binDir}:${env.PATH}`
+    if (!isWin) {
+      if (!this._loginShellPath) {
+        try {
+          this._loginShellPath = execSync('/bin/zsh -lc "echo $PATH"', { encoding: 'utf-8' }).trim()
+        } catch {
+          this._loginShellPath = ''
+        }
+      }
+      if (this._loginShellPath) {
+        env.PATH = this._loginShellPath
+      }
+
+      const lastSlash = this.claudeBinary.lastIndexOf('/')
+      if (lastSlash > 0) {
+        const binDir = this.claudeBinary.substring(0, lastSlash)
+        if (env.PATH && !env.PATH.includes(binDir)) {
+          env.PATH = `${binDir}:${env.PATH}`
+        }
+      }
+    } else {
+      const npmGlobal = join(homedir(), 'AppData', 'Roaming', 'npm')
+      const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH'
+      const pathVal = env[pathKey]
+      if (pathVal && !pathVal.includes(npmGlobal)) {
+        env[pathKey] = `${npmGlobal};${pathVal}`
+      }
     }
 
     return env

@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync, readdirSync, statSync, createReadStream } from 'fs'
 import { createInterface } from 'readline'
 import { homedir } from 'os'
+import { isMac, isWin, getWindowIconPath, getTrayIconPath, encodeProjectPath } from './platform'
 import { ControlPlane } from './claude/control-plane'
 import { ensureSkills, type SkillStatus } from './skills/installer'
 import { fetchCatalog, listInstalled, installPlugin, uninstallPlugin } from './marketplace/catalog'
@@ -21,6 +22,7 @@ let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let screenshotCounter = 0
 let toggleSequence = 0
+let savedBoundsBeforeMaximize: { x: number; y: number; width: number; height: number } | null = null
 
 // Feature flag: enable PTY interactive permissions transport
 const INTERACTIVE_PTY = process.env.CLUI_INTERACTIVE_PERMISSIONS_PTY === '1'
@@ -105,18 +107,18 @@ function createWindow(): void {
     height: PILL_HEIGHT,
     x,
     y,
-    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),  // NSPanel — non-activating, joins all spaces
+    ...(isMac ? { type: 'panel' as const } : {}),  // NSPanel — macOS only
     frame: false,
     transparent: true,
     resizable: false,
     movable: true,
     alwaysOnTop: true,
-    skipTaskbar: true,
+    skipTaskbar: !isWin,  // Show on Windows taskbar; hide on macOS (floating overlay)
     hasShadow: false,
     roundedCorners: true,
     backgroundColor: '#00000000',
     show: false,
-    icon: join(__dirname, '../../resources/icon.icns'),
+    icon: getWindowIconPath(join(__dirname, '../..')),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -131,10 +133,9 @@ function createWindow(): void {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
-    // Enable OS-level click-through for transparent regions.
-    // { forward: true } ensures mousemove events still reach the renderer
-    // so it can toggle click-through off when cursor enters interactive UI.
-    mainWindow?.setIgnoreMouseEvents(true, { forward: true })
+    // When window is visible, receive all mouse events (needed for drag, buttons on Windows).
+    // Click-through is disabled while visible — hide with Alt+Space to click through.
+    mainWindow?.setIgnoreMouseEvents(false)
     if (process.env.ELECTRON_RENDERER_URL) {
       mainWindow?.webContents.openDevTools({ mode: 'detach' })
     }
@@ -145,6 +146,7 @@ function createWindow(): void {
   mainWindow.on('close', (e) => {
     if (!forceQuit) {
       e.preventDefault()
+      mainWindow?.setIgnoreMouseEvents(true, { forward: true })
       mainWindow?.hide()
     }
   })
@@ -167,6 +169,7 @@ function toggleWindow(source = 'unknown'): void {
   // Pure toggle: visible → hide, not visible → show. No focus-based branching.
   if (mainWindow.isVisible()) {
     mainWindow.hide()
+    mainWindow.setIgnoreMouseEvents(true, { forward: true })  // Click-through when hidden
     if (SPACES_DEBUG) scheduleToggleSnapshots(toggleId, 'hide')
   } else {
     // Position on the display where the cursor currently is (not always primary)
@@ -188,6 +191,7 @@ function toggleWindow(source = 'unknown'): void {
     // without deactivating the active app — hover preserved everywhere.
     mainWindow.show()
     mainWindow.webContents.focus()
+    mainWindow.setIgnoreMouseEvents(false)  // Receive events when visible (drag, buttons)
     broadcast(IPC.WINDOW_SHOWN)
     if (SPACES_DEBUG) scheduleToggleSnapshots(toggleId, 'show')
   }
@@ -213,6 +217,43 @@ ipcMain.on(IPC.HIDE_WINDOW, () => {
   mainWindow?.hide()
 })
 
+ipcMain.on(IPC.WINDOW_MINIMIZE, () => {
+  mainWindow?.minimize()
+})
+
+ipcMain.on(IPC.WINDOW_MAXIMIZE, () => {
+  if (!mainWindow) return
+  // Track state ourselves — isMaximized() returns false for transparent windows on Windows
+  if (savedBoundsBeforeMaximize) {
+    // Restore from maximized/fullscreen
+    if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false)
+    mainWindow.setResizable(true)
+    mainWindow.setBounds(savedBoundsBeforeMaximize)
+    mainWindow.setResizable(false)
+    savedBoundsBeforeMaximize = null
+    return
+  }
+  savedBoundsBeforeMaximize = mainWindow.getBounds()
+  mainWindow.maximize()
+  // Transparent windows on Windows often don't resize; fallback to fullscreen after a tick
+  setTimeout(() => {
+    if (!mainWindow?.isDestroyed() && savedBoundsBeforeMaximize) {
+      const b = mainWindow.getBounds()
+      const display = screen.getDisplayMatching(b)
+      const { width, height } = display.bounds
+      if (b.width < width - 50 || b.height < height - 50) {
+        mainWindow.setFullScreen(true)
+      }
+    }
+  }, 50)
+})
+
+ipcMain.on(IPC.WINDOW_DRAG, (_event, delta: { x: number; y: number }) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const [x, y] = mainWindow.getPosition()
+  mainWindow.setPosition(x + delta.x, y + delta.y)
+})
+
 ipcMain.handle(IPC.IS_VISIBLE, () => {
   return mainWindow?.isVisible() ?? false
 })
@@ -231,22 +272,23 @@ ipcMain.on(IPC.SET_IGNORE_MOUSE_EVENTS, (event, ignore: boolean, options?: { for
 ipcMain.handle(IPC.START, async () => {
   log('IPC START — fetching static CLI info')
   const { execSync } = require('child_process')
+  const execOpts = { encoding: 'utf-8' as const, timeout: 5000, ...(isWin ? { shell: true } : {}) }
 
   let version = 'unknown'
   try {
-    version = execSync('claude -v', { encoding: 'utf-8', timeout: 5000 }).trim()
+    version = execSync('claude -v', execOpts).trim()
   } catch {}
 
   let auth: { email?: string; subscriptionType?: string; authMethod?: string } = {}
   try {
-    const raw = execSync('claude auth status', { encoding: 'utf-8', timeout: 5000 }).trim()
+    const raw = execSync('claude auth status', execOpts).trim()
     auth = JSON.parse(raw)
   } catch {}
 
   let mcpServers: string[] = []
   try {
-    const raw = execSync('claude mcp list', { encoding: 'utf-8', timeout: 5000 }).trim()
-    if (raw) mcpServers = raw.split('\n').filter(Boolean)
+    const raw = execSync('claude mcp list', execOpts).trim()
+    if (raw) mcpServers = raw.split(/\r?\n/).filter(Boolean)
   } catch {}
 
   return { version, auth, mcpServers, projectPath: process.cwd(), homePath: require('os').homedir() }
@@ -338,8 +380,8 @@ ipcMain.handle(IPC.LIST_SESSIONS, async (_e, projectPath?: string) => {
   try {
     const cwd = projectPath || process.cwd()
     // Claude stores project sessions at ~/.claude/projects/<encoded-path>/
-    // Path encoding: replace all '/' with '-' (leading '/' becomes leading '-')
-    const encodedPath = cwd.replace(/\//g, '-')
+    // Path encoding: normalize and replace / with -
+    const encodedPath = encodeProjectPath(cwd)
     const sessionsDir = join(homedir(), '.claude', 'projects', encodedPath)
     if (!existsSync(sessionsDir)) {
       log(`LIST_SESSIONS: directory not found: ${sessionsDir}`)
@@ -419,7 +461,7 @@ ipcMain.handle(IPC.LOAD_SESSION, async (_e, arg: { sessionId: string; projectPat
   log(`IPC LOAD_SESSION ${sessionId}${projectPath ? ` (path=${projectPath})` : ''}`)
   try {
     const cwd = projectPath || process.cwd()
-    const encodedPath = cwd.replace(/\//g, '-')
+    const encodedPath = encodeProjectPath(cwd)
     const filePath = join(homedir(), '.claude', 'projects', encodedPath, `${sessionId}.jsonl`)
     if (!existsSync(filePath)) return []
 
@@ -474,13 +516,12 @@ ipcMain.handle(IPC.LOAD_SESSION, async (_e, arg: { sessionId: string; projectPat
 ipcMain.handle(IPC.SELECT_DIRECTORY, async () => {
   if (!mainWindow) return null
   // macOS: activate app so unparented dialog appears on top (not behind other apps).
-  // Unparented avoids modal dimming on the transparent overlay.
-  // Activation is fine here — user is actively interacting with CLUI.
-  if (process.platform === 'darwin') app.focus()
+  // Windows: use mainWindow as parent so dialog appears correctly.
+  if (isMac) app.focus()
   const options = { properties: ['openDirectory'] as const }
-  const result = process.platform === 'darwin'
+  const result = isMac
     ? await dialog.showOpenDialog(options)
-    : await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(mainWindow!, options)
   return result.canceled ? null : result.filePaths[0]
 })
 
@@ -498,7 +539,7 @@ ipcMain.handle(IPC.OPEN_EXTERNAL, async (_event, url: string) => {
 ipcMain.handle(IPC.ATTACH_FILES, async () => {
   if (!mainWindow) return null
   // macOS: activate app so unparented dialog appears on top
-  if (process.platform === 'darwin') app.focus()
+  if (isMac) app.focus()
   const options = {
     properties: ['openFile', 'multiSelections'],
     filters: [
@@ -507,7 +548,7 @@ ipcMain.handle(IPC.ATTACH_FILES, async () => {
       { name: 'Code', extensions: ['ts', 'tsx', 'js', 'jsx', 'py', 'rs', 'go', 'md', 'json', 'yaml', 'toml'] },
     ],
   }
-  const result = process.platform === 'darwin'
+  const result = isMac
     ? await dialog.showOpenDialog(options)
     : await dialog.showOpenDialog(mainWindow, options)
   if (result.canceled || result.filePaths.length === 0) return null
@@ -565,10 +606,32 @@ ipcMain.handle(IPC.TAKE_SCREENSHOT, async () => {
     const timestamp = Date.now()
     const screenshotPath = join(tmpdir(), `clui-screenshot-${timestamp}.png`)
 
-    execSync(`/usr/sbin/screencapture -i "${screenshotPath}"`, {
-      timeout: 30000,
-      stdio: 'ignore',
-    })
+    if (isWin) {
+      // Windows: use PowerShell + .NET to capture full screen
+      const { writeFileSync } = require('fs')
+      const psScriptPath = join(tmpdir(), `clui-screenshot-${timestamp}.ps1`)
+      const psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+$bitmap.Save('${screenshotPath.replace(/'/g, "''")}', [System.Drawing.Imaging.ImageFormat]::Png)
+$graphics.Dispose()
+$bitmap.Dispose()
+`.trim()
+      writeFileSync(psScriptPath, psScript, 'utf-8')
+      execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psScriptPath}"`, {
+        timeout: 30000,
+        stdio: 'ignore',
+      })
+    } else {
+      execSync(`/usr/sbin/screencapture -i "${screenshotPath}"`, {
+        timeout: 30000,
+        stdio: 'ignore',
+      })
+    }
 
     if (!existsSync(screenshotPath)) {
       return null
@@ -591,6 +654,7 @@ ipcMain.handle(IPC.TAKE_SCREENSHOT, async () => {
     if (mainWindow) {
       mainWindow.show()
       mainWindow.webContents.focus()
+      mainWindow.setIgnoreMouseEvents(false)
     }
     broadcast(IPC.WINDOW_SHOWN)
     if (SPACES_DEBUG) {
@@ -643,52 +707,81 @@ ipcMain.handle(IPC.TRANSCRIBE_AUDIO, async (_event, audioBase64: string) => {
     const buf = Buffer.from(audioBase64, 'base64')
     writeFileSync(tmpWav, buf)
 
-    // Find whisper-cli (whisper-cpp homebrew) or whisper (python)
-    const candidates = [
-      '/opt/homebrew/bin/whisper-cli',
-      '/usr/local/bin/whisper-cli',
-      '/opt/homebrew/bin/whisper',
-      '/usr/local/bin/whisper',
-      join(homedir(), '.local/bin/whisper'),
-    ]
-
     let whisperBin = ''
-    for (const c of candidates) {
-      if (existsSync(c)) { whisperBin = c; break }
-    }
+    const modelCandidates: string[] = []
 
-    if (!whisperBin) {
-      try {
-        whisperBin = execSync('/bin/zsh -lc "whence -p whisper-cli"', { encoding: 'utf-8' }).trim()
-      } catch {}
-    }
-    if (!whisperBin) {
-      try {
-        whisperBin = execSync('/bin/zsh -lc "whence -p whisper"', { encoding: 'utf-8' }).trim()
-      } catch {}
+    if (isWin) {
+      // Windows: check common install locations
+      const winCandidates = [
+        join(homedir(), 'scoop', 'shims', 'whisper-cli.exe'),
+        join(homedir(), 'scoop', 'shims', 'whisper.exe'),
+        join(homedir(), 'AppData', 'Local', 'Programs', 'whisper', 'whisper-cli.exe'),
+        'whisper-cli',
+        'whisper',
+      ]
+      for (const c of winCandidates) {
+        if (c.includes('.exe') && existsSync(c)) { whisperBin = c; break }
+      }
+      if (!whisperBin) {
+        try {
+          whisperBin = execSync('where whisper-cli', { encoding: 'utf-8' }).trim().split('\n')[0]
+        } catch {}
+        if (!whisperBin) {
+          try {
+            whisperBin = execSync('where whisper', { encoding: 'utf-8' }).trim().split('\n')[0]
+          } catch {}
+        }
+      }
+      modelCandidates.push(
+        join(homedir(), '.local', 'share', 'whisper', 'ggml-tiny.bin'),
+        join(homedir(), '.local', 'share', 'whisper', 'ggml-base.bin'),
+        join(homedir(), 'scoop', 'persist', 'whisper-cpp', 'models', 'ggml-tiny.bin'),
+        join(homedir(), 'scoop', 'persist', 'whisper-cpp', 'models', 'ggml-base.bin'),
+      )
+    } else {
+      // macOS/Linux
+      const candidates = [
+        '/opt/homebrew/bin/whisper-cli',
+        '/usr/local/bin/whisper-cli',
+        '/opt/homebrew/bin/whisper',
+        '/usr/local/bin/whisper',
+        join(homedir(), '.local/bin/whisper'),
+      ]
+      for (const c of candidates) {
+        if (existsSync(c)) { whisperBin = c; break }
+      }
+      if (!whisperBin) {
+        try {
+          whisperBin = execSync('/bin/zsh -lc "whence -p whisper-cli"', { encoding: 'utf-8' }).trim()
+        } catch {}
+      }
+      if (!whisperBin) {
+        try {
+          whisperBin = execSync('/bin/zsh -lc "whence -p whisper"', { encoding: 'utf-8' }).trim()
+        } catch {}
+      }
+      modelCandidates.push(
+        join(homedir(), '.local/share/whisper/ggml-tiny.bin'),
+        join(homedir(), '.local/share/whisper/ggml-base.bin'),
+        '/opt/homebrew/share/whisper-cpp/models/ggml-tiny.bin',
+        '/opt/homebrew/share/whisper-cpp/models/ggml-base.bin',
+        join(homedir(), '.local/share/whisper/ggml-tiny.en.bin'),
+        join(homedir(), '.local/share/whisper/ggml-base.en.bin'),
+        '/opt/homebrew/share/whisper-cpp/models/ggml-tiny.en.bin',
+        '/opt/homebrew/share/whisper-cpp/models/ggml-base.en.bin',
+      )
     }
 
     if (!whisperBin) {
       return {
-        error: 'Whisper not found. Install with: brew install whisper-cpp',
+        error: isWin
+          ? 'Whisper not found. Install with: scoop install whisper-cpp or pip install openai-whisper'
+          : 'Whisper not found. Install with: brew install whisper-cpp',
         transcript: null,
       }
     }
 
     const isWhisperCpp = whisperBin.includes('whisper-cli')
-
-    // Find model file — prefer multilingual (auto-detect language) over .en (English-only)
-    const modelCandidates = [
-      join(homedir(), '.local/share/whisper/ggml-tiny.bin'),
-      join(homedir(), '.local/share/whisper/ggml-base.bin'),
-      '/opt/homebrew/share/whisper-cpp/models/ggml-tiny.bin',
-      '/opt/homebrew/share/whisper-cpp/models/ggml-base.bin',
-      // Fall back to English-only models if multilingual not available
-      join(homedir(), '.local/share/whisper/ggml-tiny.en.bin'),
-      join(homedir(), '.local/share/whisper/ggml-base.en.bin'),
-      '/opt/homebrew/share/whisper-cpp/models/ggml-tiny.en.bin',
-      '/opt/homebrew/share/whisper-cpp/models/ggml-base.en.bin',
-    ]
 
     let modelPath = ''
     for (const m of modelCandidates) {
@@ -773,8 +866,29 @@ ipcMain.handle(IPC.GET_DIAGNOSTICS, () => {
   }
 })
 
+ipcMain.handle(IPC.LAUNCH_AUTH_LOGIN, () => {
+  const { spawn } = require('child_process')
+  try {
+    if (isWin) {
+      spawn('cmd', ['/c', 'start', 'cmd', '/k', 'claude auth login'], {
+        detached: true,
+        stdio: 'ignore',
+      }).unref()
+      log('Launched auth login in new terminal')
+      return true
+    }
+    // macOS: open Terminal with claude auth login
+    const script = 'tell application "Terminal" to do script "claude auth login"'
+    require('child_process').execFile('/usr/bin/osascript', ['-e', script], () => {})
+    return true
+  } catch (err: unknown) {
+    log(`Failed to launch auth login: ${err}`)
+    return false
+  }
+})
+
 ipcMain.handle(IPC.OPEN_IN_TERMINAL, (_event, arg: string | null | { sessionId?: string | null; projectPath?: string }) => {
-  const { execFile } = require('child_process')
+  const { execFile, spawn } = require('child_process')
   const claudeBin = 'claude'
 
   // Support both old (string) and new ({ sessionId, projectPath }) calling convention
@@ -787,21 +901,33 @@ ipcMain.handle(IPC.OPEN_IN_TERMINAL, (_event, arg: string | null | { sessionId?:
     projectPath = arg.projectPath && arg.projectPath !== '~' ? arg.projectPath : process.cwd()
   }
 
-  // Escape for AppleScript: double quotes → backslash-escaped, backslashes doubled
-  const projectDir = projectPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-  let cmd: string
-  if (sessionId) {
-    cmd = `cd \\"${projectDir}\\" && ${claudeBin} --resume ${sessionId}`
-  } else {
-    cmd = `cd \\"${projectDir}\\" && ${claudeBin}`
-  }
+  try {
+    if (isWin) {
+      // Windows: start cmd or PowerShell in a new window
+      const resumeArg = sessionId ? ` --resume ${sessionId}` : ''
+      const cmd = `cd /d "${projectPath}" && ${claudeBin}${resumeArg}`
+      spawn('cmd', ['/c', 'start', 'cmd', '/k', cmd], {
+        detached: true,
+        stdio: 'ignore',
+      }).unref()
+      log(`Opened terminal with: ${cmd}`)
+      return true
+    }
 
-  const script = `tell application "Terminal"
+    // macOS: AppleScript to open Terminal.app
+    const projectDir = projectPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    let cmd: string
+    if (sessionId) {
+      cmd = `cd \\"${projectDir}\\" && ${claudeBin} --resume ${sessionId}`
+    } else {
+      cmd = `cd \\"${projectDir}\\" && ${claudeBin}`
+    }
+
+    const script = `tell application "Terminal"
   activate
   do script "${cmd}"
 end tell`
 
-  try {
     execFile('/usr/bin/osascript', ['-e', script], (err: Error | null) => {
       if (err) log(`Failed to open terminal: ${err.message}`)
       else log(`Opened terminal with: ${cmd}`)
@@ -850,8 +976,7 @@ nativeTheme.on('updated', () => {
 app.whenReady().then(() => {
   // macOS: become an accessory app. Accessory apps can have key windows (keyboard works)
   // without deactivating the currently active app (hover preserved in browsers).
-  // This is how Spotlight, Alfred, Raycast work.
-  if (process.platform === 'darwin' && app.dock) {
+  if (isMac && app.dock) {
     app.dock.hide()
   }
 
@@ -898,9 +1023,9 @@ app.whenReady().then(() => {
   }
   globalShortcut.register('CommandOrControl+Shift+K', () => toggleWindow('shortcut Cmd/Ctrl+Shift+K'))
 
-  const trayIconPath = join(__dirname, '../../resources/trayTemplate.png')
+  const trayIconPath = getTrayIconPath(join(__dirname, '../..'))
   const trayIcon = nativeImage.createFromPath(trayIconPath)
-  trayIcon.setTemplateImage(true)
+  if (isMac) trayIcon.setTemplateImage(true)  // Template icons for macOS dark/light mode
   tray = new Tray(trayIcon)
   tray.setToolTip('Clui CC — Claude Code UI')
   tray.on('click', () => toggleWindow('tray click'))
@@ -911,7 +1036,9 @@ app.whenReady().then(() => {
     ])
   )
 
-  app.on('activate', () => toggleWindow('app activate'))
+  if (isMac) {
+    app.on('activate', () => toggleWindow('app activate'))
+  }
 })
 
 app.on('will-quit', () => {
@@ -921,7 +1048,7 @@ app.on('will-quit', () => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (!isMac) {
     app.quit()
   }
 })

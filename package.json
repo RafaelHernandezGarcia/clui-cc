@@ -5,19 +5,19 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lcoutodemos/clui-cc.git"
+    "url": "https://github.com/RafaelHernandezGarcia/clui-cc.git"
   },
   "bugs": {
-    "url": "https://github.com/lcoutodemos/clui-cc/issues"
+    "url": "https://github.com/RafaelHernandezGarcia/clui-cc/issues"
   },
-  "homepage": "https://github.com/lcoutodemos/clui-cc#readme",
+  "homepage": "https://github.com/RafaelHernandezGarcia/clui-cc#readme",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "doctor": "bash scripts/doctor.sh",
-    "postinstall": "electron-builder install-app-deps && bash scripts/patch-dev-icon.sh"
+    "doctor": "node scripts/doctor.js",
+    "postinstall": "node scripts/postinstall.js"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
@@ -32,6 +32,9 @@
     "productName": "Clui CC",
     "mac": {
       "icon": "resources/icon.icns"
+    },
+    "win": {
+      "icon": "resources/icon.png"
     }
   },
   "devDependencies": {
