@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { DotsThree, Bell, ArrowsOutSimple, Moon } from '@phosphor-icons/react'
+import { DotsThree, Bell, ArrowsOutSimple, Moon, Key, Check } from '@phosphor-icons/react'
 import { useThemeStore } from '../theme'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePopoverLayer } from './PopoverLayer'
@@ -58,6 +58,25 @@ export function SettingsPopover() {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ right: number; top?: number; bottom?: number; maxHeight?: number }>({ right: 0 })
+
+  // API key state
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [apiKeyMasked, setApiKeyMasked] = useState<string | null>(null)
+  const [apiKeyHasKey, setApiKeyHasKey] = useState(false)
+  const [apiKeySaving, setApiKeySaving] = useState(false)
+  const [apiKeySaved, setApiKeySaved] = useState(false)
+  const [apiKeyEditing, setApiKeyEditing] = useState(false)
+
+  // Load API key status when popover opens
+  useEffect(() => {
+    if (open) {
+      window.clui.getApiKey().then(({ hasKey, masked }) => {
+        setApiKeyHasKey(hasKey)
+        setApiKeyMasked(masked)
+        setApiKeyEditing(!hasKey)
+      }).catch(() => {})
+    }
+  }, [open])
 
   const updatePos = useCallback(() => {
     if (!triggerRef.current) return
@@ -220,6 +239,96 @@ export function SettingsPopover() {
                   label="Toggle dark theme"
                 />
               </div>
+            </div>
+
+            <div style={{ height: 1, background: colors.popoverBorder }} />
+
+            {/* API Key */}
+            <div>
+              <div className="flex items-center gap-2 mb-1.5">
+                <Key size={14} style={{ color: colors.textTertiary }} />
+                <div className="text-[12px] font-medium" style={{ color: colors.textPrimary }}>
+                  API Key
+                </div>
+              </div>
+              {apiKeyHasKey && !apiKeyEditing ? (
+                <div className="flex items-center gap-2">
+                  <div
+                    className="flex-1 text-[10px] px-2 py-1.5 rounded"
+                    style={{
+                      fontFamily: 'monospace',
+                      background: colors.codeBg,
+                      color: colors.textSecondary,
+                      border: `1px solid ${colors.containerBorder}`,
+                    }}
+                  >
+                    {apiKeyMasked}
+                  </div>
+                  <button
+                    onClick={() => { setApiKeyEditing(true); setApiKeyInput(''); setApiKeySaved(false) }}
+                    className="text-[10px] px-2 py-1 rounded transition-colors"
+                    style={{ color: colors.accent, background: colors.accentLight }}
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <input
+                    type="password"
+                    value={apiKeyInput}
+                    onChange={(e) => { setApiKeyInput(e.target.value); setApiKeySaved(false) }}
+                    placeholder="sk-ant-..."
+                    className="text-[11px] px-2 py-1.5 rounded w-full"
+                    style={{
+                      fontFamily: 'monospace',
+                      background: colors.codeBg,
+                      color: colors.textPrimary,
+                      border: `1px solid ${colors.containerBorder}`,
+                      outline: 'none',
+                    }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  />
+                  <div className="flex gap-1.5">
+                    {apiKeyHasKey && (
+                      <button
+                        onClick={() => { setApiKeyEditing(false); setApiKeyInput('') }}
+                        className="flex-1 text-[10px] py-1 rounded transition-colors"
+                        style={{ color: colors.textSecondary, background: colors.surfacePrimary }}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    <button
+                      onClick={async () => {
+                        if (!apiKeyInput.trim()) return
+                        setApiKeySaving(true)
+                        await window.clui.setApiKey(apiKeyInput.trim())
+                        const { hasKey, masked } = await window.clui.getApiKey()
+                        setApiKeyHasKey(hasKey)
+                        setApiKeyMasked(masked)
+                        setApiKeySaving(false)
+                        setApiKeySaved(true)
+                        setApiKeyEditing(false)
+                        setApiKeyInput('')
+                        // Refresh static info to pick up new auth state
+                        useSessionStore.getState().initStaticInfo()
+                      }}
+                      disabled={apiKeySaving || !apiKeyInput.trim()}
+                      className="flex-1 flex items-center justify-center gap-1 text-[10px] py-1 rounded transition-colors"
+                      style={{
+                        color: colors.textOnAccent,
+                        background: apiKeyInput.trim() ? colors.accent : colors.sendDisabled,
+                      }}
+                    >
+                      {apiKeySaved ? <><Check size={10} /> Saved</> : apiKeySaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                  <div className="text-[9px] leading-tight" style={{ color: colors.textTertiary }}>
+                    Get your key from console.anthropic.com on your phone
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </motion.div>,

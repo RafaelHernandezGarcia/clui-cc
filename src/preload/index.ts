@@ -52,6 +52,10 @@ export interface CluiAPI {
   authPhoneCompleteRedirect(redirectUrl: string): Promise<{ ok: boolean; error: string | null }>
   authPhoneCancel(): void
 
+  // ─── API key auth ───
+  setApiKey(key: string): Promise<{ ok: boolean }>
+  getApiKey(): Promise<{ hasKey: boolean; masked: string | null }>
+
   // ─── Event listeners (main → renderer) ───
   onEvent(callback: (tabId: string, event: NormalizedEvent) => void): () => void
   onTabStatusChange(callback: (tabId: string, newStatus: string, oldStatus: string) => void): () => void
@@ -118,6 +122,10 @@ const api: CluiAPI = {
   launchAuthPhone: () => ipcRenderer.invoke(IPC.LAUNCH_AUTH_PHONE),
   authPhoneCompleteRedirect: (redirectUrl) => ipcRenderer.invoke(IPC.AUTH_PHONE_COMPLETE_REDIRECT, redirectUrl),
   authPhoneCancel: () => ipcRenderer.send(IPC.AUTH_PHONE_CANCEL),
+
+  // ─── API key auth ───
+  setApiKey: (key) => ipcRenderer.invoke(IPC.SET_API_KEY, key),
+  getApiKey: () => ipcRenderer.invoke(IPC.GET_API_KEY),
 
   // ─── Event listeners ───
   onEvent: (callback) => {

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, screen, globalShortcut, Tray, Menu, nativeImage, nativeTheme, shell } from 'electron'
 import { join } from 'path'
-import { existsSync, readdirSync, statSync, createReadStream } from 'fs'
+import { existsSync, readdirSync, statSync, createReadStream, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { createInterface } from 'readline'
 import { homedir } from 'os'
 import { isMac, isWin, getWindowIconPath, getTrayIconPath, encodeProjectPath } from './platform'
@@ -13,6 +13,36 @@ import type { RunOptions, NormalizedEvent, EnrichedError } from '../shared/types
 
 const DEBUG_MODE = process.env.CLUI_DEBUG === '1'
 const SPACES_DEBUG = DEBUG_MODE || process.env.CLUI_SPACES_DEBUG === '1'
+
+// ─── API Key persistence ───
+const API_KEY_FILE = join(homedir(), '.claude', '.clui-api-key')
+
+function loadApiKey(): string | null {
+  try {
+    if (existsSync(API_KEY_FILE)) {
+      const key = readFileSync(API_KEY_FILE, 'utf-8').trim()
+      if (key) return key
+    }
+  } catch {}
+  return null
+}
+
+function saveApiKey(key: string): void {
+  try {
+    const dir = join(homedir(), '.claude')
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(API_KEY_FILE, key, 'utf-8')
+  } catch (err) {
+    _log('main', `Failed to save API key: ${err}`)
+  }
+}
+
+// Load API key into process.env on startup so all child processes inherit it
+const savedApiKey = loadApiKey()
+if (savedApiKey) {
+  process.env.ANTHROPIC_API_KEY = savedApiKey
+  _log('main', 'Loaded saved API key from disk')
+}
 
 function log(msg: string): void {
   _log('main', msg)
@@ -996,6 +1026,31 @@ ipcMain.on(IPC.AUTH_PHONE_CANCEL, () => {
     try { phoneAuthProcess.kill() } catch {}
     phoneAuthProcess = null
   }
+})
+
+// ─── API Key Auth ───
+
+ipcMain.handle(IPC.SET_API_KEY, (_event, key: string) => {
+  const trimmed = (key || '').trim()
+  if (trimmed) {
+    process.env.ANTHROPIC_API_KEY = trimmed
+    saveApiKey(trimmed)
+    log('API key saved and set in process.env')
+    return { ok: true }
+  }
+  // Clear key
+  delete process.env.ANTHROPIC_API_KEY
+  try { require('fs').unlinkSync(API_KEY_FILE) } catch {}
+  log('API key cleared')
+  return { ok: true }
+})
+
+ipcMain.handle(IPC.GET_API_KEY, () => {
+  // Return masked version for display (never send full key to renderer)
+  const key = process.env.ANTHROPIC_API_KEY || loadApiKey()
+  if (!key) return { hasKey: false, masked: null }
+  const masked = key.substring(0, 10) + '...' + key.substring(key.length - 4)
+  return { hasKey: true, masked }
 })
 
 ipcMain.handle(IPC.OPEN_IN_TERMINAL, (_event, arg: string | null | { sessionId?: string | null; projectPath?: string }) => {

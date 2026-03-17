@@ -352,6 +352,10 @@ export const IPC = {
   AUTH_PHONE_COMPLETE_REDIRECT: 'clui:auth-phone-complete-redirect',
   AUTH_PHONE_CANCEL: 'clui:auth-phone-cancel',
 
+  // API key auth
+  SET_API_KEY: 'clui:set-api-key',
+  GET_API_KEY: 'clui:get-api-key',
+
   // Skill provisioning (main → renderer)
   SKILL_STATUS: 'clui:skill-status',
 
