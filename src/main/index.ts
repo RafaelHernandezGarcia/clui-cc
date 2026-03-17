@@ -271,7 +271,7 @@ ipcMain.on(IPC.SET_IGNORE_MOUSE_EVENTS, (event, ignore: boolean, options?: { for
 ipcMain.handle(IPC.START, async () => {
   log('IPC START — fetching static CLI info')
   const { execSync } = require('child_process')
-  const execOpts = { encoding: 'utf-8' as const, timeout: 5000, ...(isWin ? { shell: true } : {}) }
+  const execOpts = { encoding: 'utf-8' as const, timeout: 5000, env: { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: '0' }, ...(isWin ? { shell: true } : {}) }
 
   let version = 'unknown'
   try {
@@ -869,7 +869,7 @@ ipcMain.handle(IPC.LAUNCH_AUTH_LOGIN, () => {
   const { spawn } = require('child_process')
   try {
     if (isWin) {
-      spawn('cmd', ['/c', 'start', 'cmd', '/k', 'claude auth login'], {
+      spawn('cmd', ['/c', 'start', 'cmd', '/k', 'set NODE_TLS_REJECT_UNAUTHORIZED=0 && claude auth login'], {
         detached: true,
         stdio: 'ignore',
       }).unref()
@@ -877,7 +877,7 @@ ipcMain.handle(IPC.LAUNCH_AUTH_LOGIN, () => {
       return true
     }
     // macOS: open Terminal with claude auth login
-    const script = 'tell application "Terminal" to do script "claude auth login"'
+    const script = 'tell application "Terminal" to do script "NODE_TLS_REJECT_UNAUTHORIZED=0 claude auth login"'
     require('child_process').execFile('/usr/bin/osascript', ['-e', script], () => {})
     return true
   } catch (err: unknown) {
@@ -902,17 +902,20 @@ ipcMain.handle(IPC.LAUNCH_AUTH_PHONE, async () => {
       const args = ['auth', 'login']
       const proc = spawn('claude', args, {
         stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: '0' },
         ...(isWin ? { shell: true } : {}),
       })
       phoneAuthProcess = proc
       let captured = false
-      const urlRegex = /https?:\/\/[^\s"'<>]+(?:oauth|auth|login)[^\s"'<>]*/i
+      let accumulatedOutput = ''
+      const urlRegex = /https?:\/\/[^\s"'<>]+(?:oauth|auth|login|console)[^\s"'<>]*/i
       const genericUrlRegex = /https?:\/\/[^\s"'<>]{20,}/
 
       const scanForUrl = (chunk: Buffer) => {
-        if (captured) return
         const text = chunk.toString()
-        log(`[phone-auth] output: ${text.substring(0, 300)}`)
+        accumulatedOutput += text
+        log(`[phone-auth] output: ${text.substring(0, 500)}`)
+        if (captured) return
         const match = text.match(urlRegex) || text.match(genericUrlRegex)
         if (match) {
           captured = true
@@ -927,7 +930,8 @@ ipcMain.handle(IPC.LAUNCH_AUTH_PHONE, async () => {
       proc.on('close', (code) => {
         log(`[phone-auth] process exited code=${code}`)
         if (!captured) {
-          resolve({ url: null, error: `claude auth login exited (code ${code}) without producing a URL. Is Claude CLI installed?` })
+          const hint = accumulatedOutput.substring(0, 500).trim()
+          resolve({ url: null, error: `claude auth login exited (code ${code}).${hint ? '\n\n' + hint : ''}` })
         }
         phoneAuthProcess = null
       })
@@ -940,7 +944,7 @@ ipcMain.handle(IPC.LAUNCH_AUTH_PHONE, async () => {
         phoneAuthProcess = null
       })
 
-      // Timeout: if no URL captured in 15s, give up
+      // Timeout: if no URL captured in 30s, give up (corporate proxies can be slow)
       setTimeout(() => {
         if (!captured) {
           captured = true
@@ -948,7 +952,7 @@ ipcMain.handle(IPC.LAUNCH_AUTH_PHONE, async () => {
           try { proc.kill() } catch {}
           phoneAuthProcess = null
         }
-      }, 15000)
+      }, 30000)
     } catch (err: unknown) {
       resolve({ url: null, error: `Spawn failed: ${err}` })
     }
@@ -1012,7 +1016,7 @@ ipcMain.handle(IPC.OPEN_IN_TERMINAL, (_event, arg: string | null | { sessionId?:
     if (isWin) {
       // Windows: start cmd or PowerShell in a new window
       const resumeArg = sessionId ? ` --resume ${sessionId}` : ''
-      const cmd = `cd /d "${projectPath}" && ${claudeBin}${resumeArg}`
+      const cmd = `set NODE_TLS_REJECT_UNAUTHORIZED=0 && cd /d "${projectPath}" && ${claudeBin}${resumeArg}`
       spawn('cmd', ['/c', 'start', 'cmd', '/k', cmd], {
         detached: true,
         stdio: 'ignore',
@@ -1025,9 +1029,9 @@ ipcMain.handle(IPC.OPEN_IN_TERMINAL, (_event, arg: string | null | { sessionId?:
     const projectDir = projectPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
     let cmd: string
     if (sessionId) {
-      cmd = `cd \\"${projectDir}\\" && ${claudeBin} --resume ${sessionId}`
+      cmd = `cd \\"${projectDir}\\" && NODE_TLS_REJECT_UNAUTHORIZED=0 ${claudeBin} --resume ${sessionId}`
     } else {
-      cmd = `cd \\"${projectDir}\\" && ${claudeBin}`
+      cmd = `cd \\"${projectDir}\\" && NODE_TLS_REJECT_UNAUTHORIZED=0 ${claudeBin}`
     }
 
     const script = `tell application "Terminal"

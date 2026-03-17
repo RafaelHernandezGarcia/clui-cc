@@ -150,6 +150,10 @@ export class RunManager extends EventEmitter {
   private _getEnv(): NodeJS.ProcessEnv {
     const env = { ...process.env }
     delete env.CLAUDECODE
+    // Corporate proxies doing SSL inspection re-sign certs with their own CA.
+    // Node.js won't trust the proxy CA, breaking all HTTPS to anthropic.com.
+    // This bypasses cert verification so Claude Code works behind such proxies.
+    env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
 
     const isWin = platform() === 'win32'
 
